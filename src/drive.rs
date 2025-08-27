@@ -2,7 +2,7 @@ use crate::auth::Credentials;
 use crate::errors::{CedarError, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileResource {
@@ -90,21 +90,20 @@ impl GoogleDriveClient {
         }
     }
 
-    pub async fn get_file(
-        &self,
-        file_id: &str,
-        credentials: &Credentials,
-    ) -> Result<FileResource> {
+    pub async fn get_file(&self, file_id: &str, credentials: &Credentials) -> Result<FileResource> {
         let url = format!("{}/files/{}", self.base_url, file_id);
 
         let response = self
             .client
             .get(&url)
             .bearer_auth(&credentials.access_token)
-            .query(&[("fields", "id,name,mimeType,parents,version,modifiedTime,lastModifyingUser")])
+            .query(&[(
+                "fields",
+                "id,name,mimeType,parents,version,modifiedTime,lastModifyingUser",
+            )])
             .send()
             .await
-            .map_err(|e| CedarError::GoogleDrive(format!("Failed to get file: {}", e)))?;
+            .map_err(|e| CedarError::GoogleDrive(format!("Failed to get file: {e}")))?;
 
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let retry_after = response
@@ -126,13 +125,12 @@ impl GoogleDriveClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(CedarError::GoogleDrive(format!(
-                "Get file failed with status {}: {}",
-                status, body
+                "Get file failed with status {status}: {body}"
             )));
         }
 
         let file: FileResource = response.json().await.map_err(|e| {
-            CedarError::GoogleDrive(format!("Failed to parse file response: {}", e))
+            CedarError::GoogleDrive(format!("Failed to parse file response: {e}"))
         })?;
 
         debug!("Retrieved file metadata: {} ({})", file.name, file.id);
@@ -148,7 +146,9 @@ impl GoogleDriveClient {
             .bearer_auth(&credentials.access_token)
             .send()
             .await
-            .map_err(|e| CedarError::GoogleDrive(format!("Failed to get start page token: {}", e)))?;
+            .map_err(|e| {
+                CedarError::GoogleDrive(format!("Failed to get start page token: {e}"))
+            })?;
 
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let retry_after = response
@@ -170,16 +170,18 @@ impl GoogleDriveClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(CedarError::GoogleDrive(format!(
-                "Get start page token failed with status {}: {}",
-                status, body
+                "Get start page token failed with status {status}: {body}"
             )));
         }
 
         let token_response: StartPageToken = response.json().await.map_err(|e| {
-            CedarError::GoogleDrive(format!("Failed to parse start page token response: {}", e))
+            CedarError::GoogleDrive(format!("Failed to parse start page token response: {e}"))
         })?;
 
-        debug!("Retrieved start page token: {}", token_response.start_page_token);
+        debug!(
+            "Retrieved start page token: {}",
+            token_response.start_page_token
+        );
         Ok(token_response.start_page_token)
     }
 
@@ -196,11 +198,14 @@ impl GoogleDriveClient {
             .bearer_auth(&credentials.access_token)
             .query(&[
                 ("pageToken", page_token),
-                ("fields", "nextPageToken,newStartPageToken,changes(changeType,time,removed,file,fileId)"),
+                (
+                    "fields",
+                    "nextPageToken,newStartPageToken,changes(changeType,time,removed,file,fileId)",
+                ),
             ])
             .send()
             .await
-            .map_err(|e| CedarError::GoogleDrive(format!("Failed to list changes: {}", e)))?;
+            .map_err(|e| CedarError::GoogleDrive(format!("Failed to list changes: {e}")))?;
 
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let retry_after = response
@@ -222,13 +227,12 @@ impl GoogleDriveClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(CedarError::GoogleDrive(format!(
-                "List changes failed with status {}: {}",
-                status, body
+                "List changes failed with status {status}: {body}"
             )));
         }
 
         let changes: ChangeList = response.json().await.map_err(|e| {
-            CedarError::GoogleDrive(format!("Failed to parse changes response: {}", e))
+            CedarError::GoogleDrive(format!("Failed to parse changes response: {e}"))
         })?;
 
         debug!("Retrieved {} changes", changes.changes.len());
@@ -259,7 +263,7 @@ impl GoogleDriveClient {
             .json(&watch_request)
             .send()
             .await
-            .map_err(|e| CedarError::GoogleDrive(format!("Failed to watch changes: {}", e)))?;
+            .map_err(|e| CedarError::GoogleDrive(format!("Failed to watch changes: {e}")))?;
 
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let retry_after = response
@@ -281,13 +285,12 @@ impl GoogleDriveClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(CedarError::GoogleDrive(format!(
-                "Watch changes failed with status {}: {}",
-                status, body
+                "Watch changes failed with status {status}: {body}"
             )));
         }
 
         let watch_response: WatchResponse = response.json().await.map_err(|e| {
-            CedarError::GoogleDrive(format!("Failed to parse watch response: {}", e))
+            CedarError::GoogleDrive(format!("Failed to parse watch response: {e}"))
         })?;
 
         info!(
@@ -317,7 +320,7 @@ impl GoogleDriveClient {
             .json(&stop_request)
             .send()
             .await
-            .map_err(|e| CedarError::GoogleDrive(format!("Failed to stop watch: {}", e)))?;
+            .map_err(|e| CedarError::GoogleDrive(format!("Failed to stop watch: {e}")))?;
 
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let retry_after = response
@@ -339,8 +342,7 @@ impl GoogleDriveClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(CedarError::GoogleDrive(format!(
-                "Stop watch failed with status {}: {}",
-                status, body
+                "Stop watch failed with status {status}: {body}"
             )));
         }
 
@@ -363,7 +365,7 @@ impl GoogleDriveClient {
             .query(&[("mimeType", mime_type)])
             .send()
             .await
-            .map_err(|e| CedarError::GoogleDrive(format!("Failed to export document: {}", e)))?;
+            .map_err(|e| CedarError::GoogleDrive(format!("Failed to export document: {e}")))?;
 
         if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let retry_after = response
@@ -385,13 +387,12 @@ impl GoogleDriveClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(CedarError::GoogleDrive(format!(
-                "Export document failed with status {}: {}",
-                status, body
+                "Export document failed with status {status}: {body}"
             )));
         }
 
         let content = response.bytes().await.map_err(|e| {
-            CedarError::GoogleDrive(format!("Failed to read export content: {}", e))
+            CedarError::GoogleDrive(format!("Failed to read export content: {e}"))
         })?;
 
         info!("Exported document {} as {}", document_id, mime_type);

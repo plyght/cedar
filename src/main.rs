@@ -1,6 +1,5 @@
 use anyhow::Result;
-use tracing::{info, warn, error};
-use tracing_subscriber;
+use tracing::{error, info, warn};
 
 mod auth;
 mod config;

@@ -68,16 +68,16 @@ impl Default for Config {
 impl Config {
     pub async fn load() -> Result<Self> {
         let config_path = Self::config_file_path();
-        
+
         if config_path.exists() {
             info!("Loading config from {:?}", config_path);
             let contents = fs::read_to_string(&config_path)
                 .await
-                .map_err(|e| CedarError::Config(format!("Failed to read config file: {}", e)))?;
-            
+                .map_err(|e| CedarError::Config(format!("Failed to read config file: {e}")))?;
+
             let config: Config = toml::from_str(&contents)
-                .map_err(|e| CedarError::Config(format!("Failed to parse config file: {}", e)))?;
-            
+                .map_err(|e| CedarError::Config(format!("Failed to parse config file: {e}")))?;
+
             Ok(config)
         } else {
             warn!("Config file not found, using defaults");
@@ -89,19 +89,19 @@ impl Config {
 
     pub async fn save(&self) -> Result<()> {
         let config_path = Self::config_file_path();
-        
+
         if let Some(parent) = config_path.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|e| CedarError::Config(format!("Failed to create config directory: {}", e)))?;
+            fs::create_dir_all(parent).await.map_err(|e| {
+                CedarError::Config(format!("Failed to create config directory: {e}"))
+            })?;
         }
 
         let contents = toml::to_string_pretty(self)
-            .map_err(|e| CedarError::Config(format!("Failed to serialize config: {}", e)))?;
+            .map_err(|e| CedarError::Config(format!("Failed to serialize config: {e}")))?;
 
         fs::write(&config_path, contents)
             .await
-            .map_err(|e| CedarError::Config(format!("Failed to write config file: {}", e)))?;
+            .map_err(|e| CedarError::Config(format!("Failed to write config file: {e}")))?;
 
         info!("Config saved to {:?}", config_path);
         Ok(())

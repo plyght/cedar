@@ -59,14 +59,14 @@ impl DiffCalculator {
                 ChangeTag::Delete => {
                     let start = old_pos;
                     let end = old_pos + change.value().len();
-                    
+
                     edits.push(TextEdit {
                         start_index: start,
                         end_index: end,
                         new_text: String::new(),
                         operation: EditOperation::Delete,
                     });
-                    
+
                     old_pos += change.value().len();
                 }
                 ChangeTag::Insert => {
@@ -92,7 +92,7 @@ impl DiffCalculator {
         }
 
         edits.sort_by_key(|edit| edit.start_index);
-        
+
         let mut merged = Vec::new();
         let mut current = edits[0].clone();
 
@@ -181,7 +181,7 @@ impl DiffCalculator {
                             segment_id: segment_id.clone(),
                         },
                     }));
-                    
+
                     requests.push(Request::InsertText(InsertTextRequest {
                         insert_text: InsertText {
                             location: Location {
@@ -220,8 +220,9 @@ impl DiffCalculator {
         if self.utf16_offset_cache.len() > 100 {
             self.utf16_offset_cache.clear();
         }
-        
-        self.utf16_offset_cache.insert(text.to_string(), offsets.clone());
+
+        self.utf16_offset_cache
+            .insert(text.to_string(), offsets.clone());
         Ok(offsets)
     }
 
@@ -242,7 +243,10 @@ impl DiffCalculator {
         local_text: &str,
         remote_changes: &[TextEdit],
     ) -> Result<String> {
-        debug!("Applying {} remote changes to local text", remote_changes.len());
+        debug!(
+            "Applying {} remote changes to local text",
+            remote_changes.len()
+        );
 
         let mut result = local_text.to_string();
         let mut sorted_changes = remote_changes.to_vec();
@@ -252,7 +256,9 @@ impl DiffCalculator {
             if change.start_index > result.len() || change.end_index > result.len() {
                 return Err(CedarError::IndexOutOfBounds(format!(
                     "Change indices ({}, {}) exceed text length {}",
-                    change.start_index, change.end_index, result.len()
+                    change.start_index,
+                    change.end_index,
+                    result.len()
                 )));
             }
 
@@ -318,17 +324,16 @@ pub struct ConflictRegion {
 
 impl ConflictRegion {
     pub fn format_conflict_marker(&self, original_text: &str) -> String {
-        let original_section = if self.start_index < original_text.len() && self.end_index <= original_text.len() {
-            &original_text[self.start_index..self.end_index]
-        } else {
-            "[content unavailable]"
-        };
+        let original_section =
+            if self.start_index < original_text.len() && self.end_index <= original_text.len() {
+                &original_text[self.start_index..self.end_index]
+            } else {
+                "[content unavailable]"
+            };
 
         format!(
             "<<<<<<< LOCAL\n{}\n=======\n{}\n>>>>>>> REMOTE ({})\n",
-            self.local_edit.new_text,
-            self.remote_edit.new_text,
-            original_section
+            self.local_edit.new_text, self.remote_edit.new_text, original_section
         )
     }
 }
@@ -342,7 +347,7 @@ mod tests {
         let mut calc = DiffCalculator::new();
         let old_text = "Hello world";
         let new_text = "Hello beautiful world";
-        
+
         let edits = calc.calculate_edits(old_text, new_text).unwrap();
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].operation, EditOperation::Insert);
@@ -354,7 +359,7 @@ mod tests {
         let mut calc = DiffCalculator::new();
         let old_text = "Hello beautiful world";
         let new_text = "Hello world";
-        
+
         let edits = calc.calculate_edits(old_text, new_text).unwrap();
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].operation, EditOperation::Delete);
@@ -365,8 +370,8 @@ mod tests {
         let mut calc = DiffCalculator::new();
         let text = "Hello 😄 world";
         let offsets = calc.calculate_utf16_offsets(text).unwrap();
-        
-        assert!(offsets.len() > 0);
+
+        assert!(!offsets.is_empty());
         assert_eq!(offsets[0], 0);
         assert!(offsets.last().unwrap() > &text.len());
     }
@@ -374,21 +379,21 @@ mod tests {
     #[test]
     fn test_conflict_detection() {
         let calc = DiffCalculator::new();
-        
+
         let local_edits = vec![TextEdit {
             start_index: 5,
             end_index: 10,
             new_text: "local".to_string(),
             operation: EditOperation::Replace,
         }];
-        
+
         let remote_edits = vec![TextEdit {
             start_index: 7,
             end_index: 12,
             new_text: "remote".to_string(),
             operation: EditOperation::Replace,
         }];
-        
+
         let conflicts = calc.detect_conflicts(&local_edits, &remote_edits);
         assert_eq!(conflicts.len(), 1);
     }

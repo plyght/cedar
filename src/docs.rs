@@ -3,7 +3,7 @@ use crate::errors::{CedarError, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
@@ -272,7 +272,7 @@ impl GoogleDocsClient {
             .bearer_auth(&credentials.access_token)
             .send()
             .await
-            .map_err(|e| CedarError::GoogleDocs(format!("Failed to get document: {}", e)))?;
+            .map_err(|e| CedarError::GoogleDocs(format!("Failed to get document: {e}")))?;
 
         let status = response.status();
         let headers = response.headers().clone();
@@ -295,16 +295,18 @@ impl GoogleDocsClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(CedarError::GoogleDocs(format!(
-                "API request failed with status {}: {}",
-                status, body
+                "API request failed with status {status}: {body}"
             )));
         }
 
         let document: Document = response.json().await.map_err(|e| {
-            CedarError::GoogleDocs(format!("Failed to parse document response: {}", e))
+            CedarError::GoogleDocs(format!("Failed to parse document response: {e}"))
         })?;
 
-        debug!("Retrieved document: {} (revision: {})", document.title, document.revision_id);
+        debug!(
+            "Retrieved document: {} (revision: {})",
+            document.title, document.revision_id
+        );
         Ok(document)
     }
 
@@ -319,7 +321,10 @@ impl GoogleDocsClient {
         debug!(
             "Sending batch update with {} requests (revision: {:?})",
             request.requests.len(),
-            request.write_control.as_ref().map(|wc| &wc.required_revision_id)
+            request
+                .write_control
+                .as_ref()
+                .map(|wc| &wc.required_revision_id)
         );
 
         let response = self
@@ -329,7 +334,7 @@ impl GoogleDocsClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| CedarError::GoogleDocs(format!("Failed to send batch update: {}", e)))?;
+            .map_err(|e| CedarError::GoogleDocs(format!("Failed to send batch update: {e}")))?;
 
         let status = response.status();
         let headers = response.headers().clone();
@@ -351,21 +356,20 @@ impl GoogleDocsClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            
+
             if status == reqwest::StatusCode::BAD_REQUEST && body.contains("INVALID_REVISION_ID") {
                 return Err(CedarError::Conflict(
-                    "Document was modified by another client, revision ID mismatch".to_string()
+                    "Document was modified by another client, revision ID mismatch".to_string(),
                 ));
             }
-            
+
             return Err(CedarError::GoogleDocs(format!(
-                "Batch update failed with status {}: {}",
-                status, body
+                "Batch update failed with status {status}: {body}"
             )));
         }
 
         let batch_response: BatchUpdateResponse = response.json().await.map_err(|e| {
-            CedarError::GoogleDocs(format!("Failed to parse batch update response: {}", e))
+            CedarError::GoogleDocs(format!("Failed to parse batch update response: {e}"))
         })?;
 
         info!("Batch update completed successfully");

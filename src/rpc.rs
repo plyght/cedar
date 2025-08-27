@@ -8,6 +8,7 @@ use jsonrpsee::{
     core::{async_trait, RpcResult},
     proc_macros::rpc,
     server::{ServerBuilder, ServerHandle},
+    types::{ErrorCode, ErrorObject},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -63,7 +64,11 @@ pub trait CedarRpc {
     async fn authenticate(&self) -> RpcResult<bool>;
 
     #[method(name = "open_document")]
-    async fn open_document(&self, document_id: String, suggestions_mode: Option<String>) -> RpcResult<DocumentInfo>;
+    async fn open_document(
+        &self,
+        document_id: String,
+        suggestions_mode: Option<String>,
+    ) -> RpcResult<DocumentInfo>;
 
     #[method(name = "sync_document")]
     async fn sync_document(&self, change: TextChange) -> RpcResult<SyncStatus>;
@@ -97,6 +102,10 @@ pub struct CedarRpcImpl {
 }
 
 impl CedarRpcImpl {
+    fn make_error(message: String) -> ErrorObject<'static> {
+        ErrorObject::owned(ErrorCode::InternalError.code(), message, None::<()>)
+    }
+
     pub fn new(config: Config) -> Result<Self> {
         let auth_manager = AuthManager::new(config.google.clone())?;
 
@@ -123,22 +132,22 @@ impl CedarRpcImpl {
 
         let mut auth_manager = self.auth_manager.lock().await;
         let fresh_credentials = auth_manager.get_valid_credentials().await?;
-        
+
         let mut credentials_guard = self.credentials.write().await;
         *credentials_guard = Some(fresh_credentials.clone());
-        
+
         Ok(fresh_credentials)
     }
 
     fn is_token_expired(&self, credentials: &Credentials) -> bool {
-        credentials
-            .expires_at
-            .map_or(false, |exp| chrono::Utc::now() + chrono::Duration::minutes(5) > exp)
+        credentials.expires_at.is_some_and(|exp| {
+            chrono::Utc::now() + chrono::Duration::minutes(5) > exp
+        })
     }
 
     async fn convert_document_to_text(&self, document: &crate::docs::Document) -> String {
         let mut content = String::new();
-        
+
         for element in &document.body.content {
             if let Some(paragraph) = &element.paragraph {
                 for para_element in &paragraph.elements {
@@ -161,7 +170,11 @@ impl CedarRpcImpl {
         }
     }
 
-    fn convert_conflicts(&self, conflicts: Vec<ConflictRegion>, original_text: &str) -> Vec<ConflictInfo> {
+    fn convert_conflicts(
+        &self,
+        conflicts: Vec<ConflictRegion>,
+        original_text: &str,
+    ) -> Vec<ConflictInfo> {
         conflicts
             .into_iter()
             .map(|conflict| {
@@ -188,23 +201,30 @@ impl CedarRpcServer for CedarRpcImpl {
             }
             Err(e) => {
                 error!("Authentication failed: {}", e);
-                Err(format!("Authentication failed: {}", e))
+                Err(Self::make_error(format!("Authentication failed: {e}")))
             }
         }
     }
 
-    async fn open_document(&self, document_id: String, suggestions_mode: Option<String>) -> RpcResult<DocumentInfo> {
-        let credentials = self.ensure_authenticated().await
-            .map_err(|e| format!("Authentication failed: {}", e))?;
+    async fn open_document(
+        &self,
+        document_id: String,
+        suggestions_mode: Option<String>,
+    ) -> RpcResult<DocumentInfo> {
+        let credentials = self
+            .ensure_authenticated()
+            .await
+            .map_err(|e| Self::make_error(format!("Authentication failed: {e}")))?;
 
         let mode = suggestions_mode
             .as_ref()
             .map(|m| self.suggestions_mode_from_string(m));
 
-        let document = self.docs_client
+        let document = self
+            .docs_client
             .get_document(&document_id, &credentials, mode)
             .await
-            .map_err(|e| format!("Failed to get document: {}", e))?;
+            .map_err(|e| Self::make_error(format!("Failed to get document: {e}")))?;
 
         let content = self.convert_document_to_text(&document).await;
 
@@ -216,7 +236,10 @@ impl CedarRpcServer for CedarRpcImpl {
             suggestions_mode: suggestions_mode.unwrap_or_else(|| "inline".to_string()),
         };
 
-        self.document_cache.write().await.insert(document_id.clone(), doc_info.clone());
+        self.document_cache
+            .write()
+            .await
+            .insert(document_id.clone(), doc_info.clone());
 
         let sync_status = SyncStatus {
             document_id: document_id.clone(),
@@ -226,25 +249,35 @@ impl CedarRpcServer for CedarRpcImpl {
             conflicts: vec![],
         };
 
-        self.sync_statuses.write().await.insert(document_id, sync_status);
+        self.sync_statuses
+            .write()
+            .await
+            .insert(document_id, sync_status);
 
         info!("Opened document: {} ({})", doc_info.title, doc_info.id);
         Ok(doc_info)
     }
 
     async fn sync_document(&self, change: TextChange) -> RpcResult<SyncStatus> {
-        let credentials = self.ensure_authenticated().await
-            .map_err(|e| format!("Authentication failed: {}", e))?;
+        let credentials = self
+            .ensure_authenticated()
+            .await
+            .map_err(|e| Self::make_error(format!("Authentication failed: {e}")))?;
 
-        let cached_doc = self.document_cache.read().await.get(&change.document_id).cloned();
-        let cached_doc = cached_doc.ok_or_else(|| {
-            "Document not found in cache. Call open_document first."
-        })?;
+        let cached_doc = self
+            .document_cache
+            .read()
+            .await
+            .get(&change.document_id)
+            .cloned();
+        let cached_doc =
+            cached_doc.ok_or_else(|| Self::make_error("Document not found in cache. Call open_document first.".to_string()))?;
 
-        let current_document = self.docs_client
+        let current_document = self
+            .docs_client
             .get_document(&change.document_id, &credentials, None)
             .await
-            .map_err(|e| format!("Failed to get current document: {}", e))?;
+            .map_err(|e| Self::make_error(format!("Failed to get current document: {e}")))?;
 
         let current_content = self.convert_document_to_text(&current_document).await;
 
@@ -254,17 +287,17 @@ impl CedarRpcServer for CedarRpcImpl {
             let mut diff_calc = self.diff_calculator.lock().await;
             let local_edits = diff_calc
                 .calculate_edits(&cached_doc.content, &change.content)
-                .map_err(|e| format!("Failed to calculate local edits: {}", e))?;
+                .map_err(|e| Self::make_error(format!("Failed to calculate local edits: {e}")))?;
 
             let remote_edits = diff_calc
                 .calculate_edits(&cached_doc.content, &current_content)
-                .map_err(|e| format!("Failed to calculate remote edits: {}", e))?;
+                .map_err(|e| Self::make_error(format!("Failed to calculate remote edits: {e}")))?;
 
             let conflicts = diff_calc.detect_conflicts(&local_edits, &remote_edits);
 
             if !conflicts.is_empty() {
                 let conflict_infos = self.convert_conflicts(conflicts, &cached_doc.content);
-                
+
                 let sync_status = SyncStatus {
                     document_id: change.document_id.clone(),
                     local_revision: cached_doc.revision_id,
@@ -273,7 +306,10 @@ impl CedarRpcServer for CedarRpcImpl {
                     conflicts: conflict_infos,
                 };
 
-                self.sync_statuses.write().await.insert(change.document_id.clone(), sync_status.clone());
+                self.sync_statuses
+                    .write()
+                    .await
+                    .insert(change.document_id.clone(), sync_status.clone());
                 return Ok(sync_status);
             }
         }
@@ -281,11 +317,14 @@ impl CedarRpcServer for CedarRpcImpl {
         let mut diff_calc = self.diff_calculator.lock().await;
         let edits = diff_calc
             .calculate_edits(&cached_doc.content, &change.content)
-            .map_err(|e| format!("Failed to calculate diff: {}", e))?;
+            .map_err(|e| Self::make_error(format!("Failed to calculate diff: {e}")))?;
 
         if edits.is_empty() {
             debug!("No changes detected, skipping sync");
-            let sync_status = self.sync_statuses.read().await
+            let sync_status = self
+                .sync_statuses
+                .read()
+                .await
                 .get(&change.document_id)
                 .cloned()
                 .unwrap_or_else(|| SyncStatus {
@@ -305,11 +344,12 @@ impl CedarRpcServer for CedarRpcImpl {
                 &current_document.revision_id,
                 None,
             )
-            .map_err(|e| format!("Failed to create batch update: {}", e))?;
+            .map_err(|e| Self::make_error(format!("Failed to create batch update: {e}")))?;
 
         drop(diff_calc);
 
-        match self.docs_client
+        match self
+            .docs_client
             .batch_update(&change.document_id, batch_request, &credentials)
             .await
         {
@@ -317,14 +357,18 @@ impl CedarRpcServer for CedarRpcImpl {
                 let updated_doc = DocumentInfo {
                     id: change.document_id.clone(),
                     title: cached_doc.title,
-                    revision_id: response.write_control
+                    revision_id: response
+                        .write_control
                         .map(|wc| wc.required_revision_id)
                         .unwrap_or(current_document.revision_id),
                     content: change.content.clone(),
                     suggestions_mode: cached_doc.suggestions_mode,
                 };
 
-                self.document_cache.write().await.insert(change.document_id.clone(), updated_doc.clone());
+                self.document_cache
+                    .write()
+                    .await
+                    .insert(change.document_id.clone(), updated_doc.clone());
 
                 let sync_status = SyncStatus {
                     document_id: change.document_id.clone(),
@@ -334,14 +378,17 @@ impl CedarRpcServer for CedarRpcImpl {
                     conflicts: vec![],
                 };
 
-                self.sync_statuses.write().await.insert(change.document_id, sync_status.clone());
+                self.sync_statuses
+                    .write()
+                    .await
+                    .insert(change.document_id, sync_status.clone());
 
                 info!("Document synced successfully");
                 Ok(sync_status)
             }
             Err(CedarError::Conflict(msg)) => {
                 warn!("Sync conflict detected: {}", msg);
-                
+
                 let sync_status = SyncStatus {
                     document_id: change.document_id.clone(),
                     local_revision: cached_doc.revision_id,
@@ -350,30 +397,36 @@ impl CedarRpcServer for CedarRpcImpl {
                     conflicts: vec![ConflictInfo {
                         start_index: 0,
                         end_index: change.content.len(),
-                        local_content: change.content,
-                        remote_content: current_content,
-                        marker: format!("<<<<<<< LOCAL\n{}\n=======\n{}\n>>>>>>> REMOTE\n", 
-                            change.content, current_content),
+                        local_content: change.content.clone(),
+                        remote_content: current_content.clone(),
+                        marker: format!(
+                            "<<<<<<< LOCAL\n{}\n=======\n{}\n>>>>>>> REMOTE\n",
+                            change.content, current_content
+                        ),
                     }],
                 };
 
-                self.sync_statuses.write().await.insert(change.document_id, sync_status.clone());
+                self.sync_statuses
+                    .write()
+                    .await
+                    .insert(change.document_id, sync_status.clone());
                 Ok(sync_status)
             }
             Err(e) => {
                 error!("Batch update failed: {}", e);
-                Err(format!("Sync failed: {}", e))
+                Err(Self::make_error(format!("Sync failed: {e}")))
             }
         }
     }
 
     async fn get_sync_status(&self, document_id: String) -> RpcResult<SyncStatus> {
-        let sync_status = self.sync_statuses.read().await
+        let sync_status = self
+            .sync_statuses
+            .read()
+            .await
             .get(&document_id)
             .cloned()
-            .ok_or_else(|| {
-                "Document not found. Call open_document first."
-            })?;
+            .ok_or_else(|| Self::make_error("Document not found. Call open_document first.".to_string()))?;
 
         Ok(sync_status)
     }
@@ -383,8 +436,10 @@ impl CedarRpcServer for CedarRpcImpl {
         if let Some(status) = sync_statuses.get_mut(&document_id) {
             if !status.conflicts.is_empty() {
                 status.conflicts.clear();
-                
-                if let Some(mut cached_doc) = self.document_cache.write().await.get_mut(&document_id) {
+
+                if let Some(cached_doc) =
+                    self.document_cache.write().await.get_mut(&document_id)
+                {
                     cached_doc.content = resolution;
                 }
 
@@ -394,36 +449,39 @@ impl CedarRpcServer for CedarRpcImpl {
                 Ok(false)
             }
         } else {
-            Err("Document not found")
+            Err(Self::make_error("Document not found".to_string()))
         }
     }
 
     async fn export_document(&self, request: ExportRequest) -> RpcResult<Vec<u8>> {
-        let credentials = self.ensure_authenticated().await
-            .map_err(|e| format!("Authentication failed: {}", e))?;
+        let credentials = self
+            .ensure_authenticated()
+            .await
+            .map_err(|e| Self::make_error(format!("Authentication failed: {e}")))?;
 
         let mime_type = match request.format.as_str() {
             "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "pdf" => "application/pdf",
             "txt" => "text/plain",
             "md" => "text/plain",
-            _ => return Err("Unsupported export format"),
+            _ => return Err(Self::make_error("Unsupported export format".to_string())),
         };
 
-        let content = self.drive_client
+        let content = self
+            .drive_client
             .export_document(&request.document_id, mime_type, &credentials)
             .await
-            .map_err(|e| format!("Export failed: {}", e))?;
+            .map_err(|e| Self::make_error(format!("Export failed: {e}")))?;
 
-        info!("Exported document {} as {}", request.document_id, request.format);
+        info!(
+            "Exported document {} as {}",
+            request.document_id, request.format
+        );
         Ok(content.to_vec())
     }
 
     async fn list_documents(&self) -> RpcResult<Vec<DocumentInfo>> {
-        let documents = self.document_cache.read().await
-            .values()
-            .cloned()
-            .collect();
+        let documents = self.document_cache.read().await.values().cloned().collect();
 
         Ok(documents)
     }
@@ -437,8 +495,7 @@ impl CedarRpcServer for CedarRpcImpl {
         let doc_count = self.document_cache.read().await.len();
 
         Ok(format!(
-            "Cedar daemon is running. Auth: {}, Documents: {}",
-            auth_status, doc_count
+            "Cedar daemon is running. Auth: {auth_status}, Documents: {doc_count}"
         ))
     }
 }
@@ -454,7 +511,7 @@ impl JsonRpcServer {
         let rpc_impl = Arc::new(CedarRpcImpl::new(config.clone())?);
         let address: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
             .parse()
-            .map_err(|e| CedarError::Config(format!("Invalid server address: {}", e)))?;
+            .map_err(|e| CedarError::Config(format!("Invalid server address: {e}")))?;
 
         Ok(Self {
             handle: None,
@@ -471,10 +528,11 @@ impl JsonRpcServer {
         let server = ServerBuilder::default()
             .build(&self.address)
             .await
-            .map_err(|e| CedarError::JsonRpc(format!("Failed to build server: {}", e)))?;
+            .map_err(|e| CedarError::JsonRpc(format!("Failed to build server: {e}")))?;
 
-        let addr = server.local_addr()
-            .map_err(|e| CedarError::JsonRpc(format!("Failed to get server address: {}", e)))?;
+        let addr = server
+            .local_addr()
+            .map_err(|e| CedarError::JsonRpc(format!("Failed to get server address: {e}")))?;
 
         let handle = server.start(self.rpc_impl.as_ref().clone().into_rpc());
         self.handle = Some(handle.clone());
@@ -489,13 +547,15 @@ impl JsonRpcServer {
 
     async fn start_background_tasks(&self) {
         let rpc_impl = Arc::clone(&self.rpc_impl);
-        
+
         tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(rpc_impl.config.sync.poll_interval_seconds));
-            
+            let mut interval = interval(Duration::from_secs(
+                rpc_impl.config.sync.poll_interval_seconds,
+            ));
+
             loop {
                 interval.tick().await;
-                
+
                 if let Err(e) = Self::poll_for_changes(&rpc_impl).await {
                     warn!("Failed to poll for changes: {}", e);
                 }
@@ -508,7 +568,7 @@ impl JsonRpcServer {
         let Some(credentials) = credentials_guard.as_ref() else {
             return Ok(()); // Not authenticated yet
         };
-        
+
         if rpc_impl.is_token_expired(credentials) {
             debug!("Skipping change poll - token expired");
             return Ok(());
@@ -517,20 +577,26 @@ impl JsonRpcServer {
         let credentials = credentials.clone();
         drop(credentials_guard);
 
-        let document_ids: Vec<String> = rpc_impl.document_cache.read().await
+        let document_ids: Vec<String> = rpc_impl
+            .document_cache
+            .read()
+            .await
             .keys()
             .cloned()
             .collect();
 
         for document_id in document_ids {
-            match Self::check_document_changes(&rpc_impl, &document_id, &credentials).await {
+            match Self::check_document_changes(rpc_impl, &document_id, &credentials).await {
                 Ok(changed) => {
                     if changed {
                         info!("Remote changes detected for document {}", document_id);
                     }
                 }
                 Err(e) => {
-                    debug!("Failed to check changes for document {}: {}", document_id, e);
+                    debug!(
+                        "Failed to check changes for document {}: {}",
+                        document_id, e
+                    );
                 }
             }
         }
@@ -543,7 +609,10 @@ impl JsonRpcServer {
         document_id: &str,
         credentials: &Credentials,
     ) -> Result<bool> {
-        let cached_doc = rpc_impl.document_cache.read().await
+        let cached_doc = rpc_impl
+            .document_cache
+            .read()
+            .await
             .get(document_id)
             .cloned();
 
@@ -551,13 +620,14 @@ impl JsonRpcServer {
             return Ok(false);
         };
 
-        let current_document = rpc_impl.docs_client
+        let current_document = rpc_impl
+            .docs_client
             .get_document(document_id, credentials, None)
             .await?;
 
         if current_document.revision_id != cached_doc.revision_id {
             let current_content = rpc_impl.convert_document_to_text(&current_document).await;
-            
+
             let updated_doc = DocumentInfo {
                 id: document_id.to_string(),
                 title: current_document.title,
@@ -566,7 +636,10 @@ impl JsonRpcServer {
                 suggestions_mode: cached_doc.suggestions_mode,
             };
 
-            rpc_impl.document_cache.write().await
+            rpc_impl
+                .document_cache
+                .write()
+                .await
                 .insert(document_id.to_string(), updated_doc);
 
             let mut sync_statuses = rpc_impl.sync_statuses.write().await;
@@ -583,8 +656,9 @@ impl JsonRpcServer {
 
     pub async fn shutdown(&mut self) -> Result<()> {
         if let Some(handle) = self.handle.take() {
-            handle.stop()
-                .map_err(|e| CedarError::JsonRpc(format!("Failed to stop server: {}", e)))?;
+            handle
+                .stop()
+                .map_err(|e| CedarError::JsonRpc(format!("Failed to stop server: {e}")))?;
             info!("JSON-RPC server stopped");
         }
         Ok(())

@@ -1,9 +1,8 @@
 use crate::config::GoogleConfig;
 use crate::errors::{CedarError, Result};
 use oauth2::{
-    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl,
-    HttpRequest, HttpResponse,
+    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpRequest,
+    HttpResponse, PkceCodeChallenge, RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -50,13 +49,13 @@ impl AuthManager {
             .ok_or_else(|| CedarError::Auth("Client secret not configured".to_string()))?;
 
         let auth_url = AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
-            .map_err(|e| CedarError::Auth(format!("Invalid auth URL: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Invalid auth URL: {e}")))?;
 
         let token_url = TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())
-            .map_err(|e| CedarError::Auth(format!("Invalid token URL: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Invalid token URL: {e}")))?;
 
         let redirect_url = RedirectUrl::new(config.redirect_uri.clone())
-            .map_err(|e| CedarError::Auth(format!("Invalid redirect URI: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Invalid redirect URI: {e}")))?;
 
         let client = BasicClient::new(
             ClientId::new(client_id.clone()),
@@ -102,12 +101,10 @@ impl AuthManager {
             auth_request = auth_request.add_scope(Scope::new(scope.clone()));
         }
 
-        let (auth_url, csrf_token) = auth_request
-            .set_pkce_challenge(pkce_challenge)
-            .url();
+        let (auth_url, csrf_token) = auth_request.set_pkce_challenge(pkce_challenge).url();
 
         println!("Please visit this URL to authorize Cedar:");
-        println!("{}", auth_url);
+        println!("{auth_url}");
         println!("\nWaiting for authorization callback...");
 
         let authorization_code = self.start_callback_server(csrf_token).await?;
@@ -121,14 +118,14 @@ impl AuthManager {
                 Self::execute_http_request(http_client, request).await
             })
             .await
-            .map_err(|e| CedarError::Auth(format!("Token exchange failed: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Token exchange failed: {e}")))?;
 
         let credentials = Credentials {
             access_token: token_result.access_token().secret().clone(),
             refresh_token: token_result.refresh_token().map(|t| t.secret().clone()),
-            expires_at: token_result.expires_in().map(|duration| {
-                chrono::Utc::now() + chrono::Duration::from_std(duration).unwrap()
-            }),
+            expires_at: token_result
+                .expires_in()
+                .map(|duration| chrono::Utc::now() + chrono::Duration::from_std(duration).unwrap()),
         };
 
         self.save_credentials(&credentials).await?;
@@ -139,9 +136,9 @@ impl AuthManager {
 
     async fn start_callback_server(&self, expected_csrf: CsrfToken) -> Result<AuthorizationCode> {
         use std::sync::{Arc, Mutex};
-        use tokio::sync::oneshot;
-        use tokio::net::TcpListener;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::sync::oneshot;
 
         let result = Arc::new(Mutex::new(None));
 
@@ -149,31 +146,34 @@ impl AuthManager {
         let tx = Arc::new(Mutex::new(Some(tx)));
 
         let redirect_url = Url::parse(&self.config.redirect_uri)
-            .map_err(|e| CedarError::Auth(format!("Invalid redirect URI: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Invalid redirect URI: {e}")))?;
 
         let port = redirect_url
             .port()
             .ok_or_else(|| CedarError::Auth("Redirect URI must include a port".to_string()))?;
 
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+        let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
             .await
-            .map_err(|e| CedarError::Auth(format!("Failed to bind callback server: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Failed to bind callback server: {e}")))?;
 
         let result_clone = Arc::clone(&result);
         let tx_clone = Arc::clone(&tx);
-        
+
         tokio::spawn(async move {
             if let Ok((mut stream, _)) = listener.accept().await {
                 let mut buffer = [0; 1024];
                 if let Ok(bytes_read) = stream.read(&mut buffer).await {
                     let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-                    
+
                     if let Some(line) = request.lines().next() {
                         if let Some(path) = line.split_whitespace().nth(1) {
                             if let Some(query_start) = path.find('?') {
                                 let query = &path[query_start + 1..];
-                                
-                                let response = match Self::parse_callback_query(query, expected_csrf) {
+
+                                let response = match Self::parse_callback_query(
+                                    query,
+                                    expected_csrf,
+                                ) {
                                     Ok(code) => {
                                         *result_clone.lock().unwrap() = Some(Ok(code));
                                         "HTTP/1.1 200 OK\r\n\r\nAuthorization successful! You can close this window."
@@ -183,13 +183,13 @@ impl AuthManager {
                                         "HTTP/1.1 400 Bad Request\r\n\r\nAuthorization failed"
                                     }
                                 };
-                                
+
                                 let _ = stream.write_all(response.as_bytes()).await;
                             }
                         }
                     }
                 }
-                
+
                 if let Some(sender) = tx_clone.lock().unwrap().take() {
                     let _ = sender.send(());
                 }
@@ -197,22 +197,25 @@ impl AuthManager {
         });
 
         match rx.await {
-            Ok(_) => {
-                match result.lock().unwrap().take() {
-                    Some(Ok(code)) => Ok(code),
-                    Some(Err(e)) => Err(e),
-                    None => Err(CedarError::Auth("No authorization result received".to_string())),
-                }
-            }
-            Err(_) => Err(CedarError::Auth("Callback server task failed".to_string()))
+            Ok(_) => match result.lock().unwrap().take() {
+                Some(Ok(code)) => Ok(code),
+                Some(Err(e)) => Err(e),
+                None => Err(CedarError::Auth(
+                    "No authorization result received".to_string(),
+                )),
+            },
+            Err(_) => Err(CedarError::Auth("Callback server task failed".to_string())),
         }
     }
 
-    async fn execute_http_request(client: &Client, request: HttpRequest) -> std::result::Result<HttpResponse, OAuth2HttpError> {
+    async fn execute_http_request(
+        client: &Client,
+        request: HttpRequest,
+    ) -> std::result::Result<HttpResponse, OAuth2HttpError> {
         let method_str = request.method.to_string();
         let mut req_builder = client.request(
             method_str.parse().unwrap_or(reqwest::Method::GET),
-            &request.url.to_string(),
+            request.url.to_string(),
         );
 
         for (name, value) in &request.headers {
@@ -233,16 +236,16 @@ impl AuthManager {
         let body = response.bytes().await?;
 
         // Convert reqwest types to oauth2 types
-        use oauth2::http::{StatusCode, HeaderMap, HeaderName, HeaderValue};
-        
+        use oauth2::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+
         let oauth_status = StatusCode::from_u16(status_code)?;
         let mut oauth_headers = HeaderMap::new();
-        
+
         for (name, value) in headers_map {
             if let (Some(name), Ok(value_str)) = (name, std::str::from_utf8(value.as_bytes())) {
                 if let (Ok(header_name), Ok(header_value)) = (
                     HeaderName::from_bytes(name.as_str().as_bytes()),
-                    HeaderValue::from_str(value_str)
+                    HeaderValue::from_str(value_str),
                 ) {
                     oauth_headers.insert(header_name, header_value);
                 }
@@ -262,16 +265,17 @@ impl AuthManager {
             .filter_map(|param| {
                 let mut parts = param.splitn(2, '=');
                 match (parts.next(), parts.next()) {
-                    (Some(key), Some(value)) => {
-                        Some((key.to_string(), urlencoding::decode(value).unwrap().to_string()))
-                    }
+                    (Some(key), Some(value)) => Some((
+                        key.to_string(),
+                        urlencoding::decode(value).unwrap().to_string(),
+                    )),
                     _ => None,
                 }
             })
             .collect();
 
         if let Some(error) = params.get("error") {
-            return Err(CedarError::Auth(format!("OAuth error: {}", error)));
+            return Err(CedarError::Auth(format!("OAuth error: {error}")));
         }
 
         let state = params
@@ -292,8 +296,14 @@ impl AuthManager {
     async fn refresh_access_token(&self, refresh_token: &str) -> Result<Credentials> {
         let grant_type = "refresh_token".to_string();
         let params = [
-            ("client_id", self.config.client_id.as_ref().unwrap().as_str()),
-            ("client_secret", self.config.client_secret.as_ref().unwrap().as_str()),
+            (
+                "client_id",
+                self.config.client_id.as_ref().unwrap().as_str(),
+            ),
+            (
+                "client_secret",
+                self.config.client_secret.as_ref().unwrap().as_str(),
+            ),
             ("refresh_token", refresh_token),
             ("grant_type", grant_type.as_str()),
         ];
@@ -304,18 +314,15 @@ impl AuthManager {
             .form(&params)
             .send()
             .await
-            .map_err(|e| CedarError::Auth(format!("Token refresh request failed: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Token refresh request failed: {e}")))?;
 
         let token_response: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| CedarError::Auth(format!("Failed to parse token response: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Failed to parse token response: {e}")))?;
 
         if let Some(error) = token_response.get("error") {
-            return Err(CedarError::Auth(format!(
-                "Token refresh failed: {}",
-                error
-            )));
+            return Err(CedarError::Auth(format!("Token refresh failed: {error}")));
         }
 
         let access_token = token_response["access_token"]
@@ -341,9 +348,9 @@ impl AuthManager {
     }
 
     fn is_token_expired(&self, credentials: &Credentials) -> bool {
-        credentials
-            .expires_at
-            .map_or(false, |exp| chrono::Utc::now() + chrono::Duration::minutes(5) > exp)
+        credentials.expires_at.is_some_and(|exp| {
+            chrono::Utc::now() + chrono::Duration::minutes(5) > exp
+        })
     }
 
     async fn load_credentials(&self) -> Result<Credentials> {
@@ -353,25 +360,25 @@ impl AuthManager {
 
         let contents = fs::read_to_string(&self.config.credentials_file)
             .await
-            .map_err(|e| CedarError::Auth(format!("Failed to read credentials file: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Failed to read credentials file: {e}")))?;
 
         serde_json::from_str(&contents)
-            .map_err(|e| CedarError::Auth(format!("Failed to parse credentials file: {}", e)))
+            .map_err(|e| CedarError::Auth(format!("Failed to parse credentials file: {e}")))
     }
 
     async fn save_credentials(&self, credentials: &Credentials) -> Result<()> {
         if let Some(parent) = self.config.credentials_file.parent() {
             fs::create_dir_all(parent).await.map_err(|e| {
-                CedarError::Auth(format!("Failed to create credentials directory: {}", e))
+                CedarError::Auth(format!("Failed to create credentials directory: {e}"))
             })?;
         }
 
         let contents = serde_json::to_string_pretty(credentials)
-            .map_err(|e| CedarError::Auth(format!("Failed to serialize credentials: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Failed to serialize credentials: {e}")))?;
 
         fs::write(&self.config.credentials_file, contents)
             .await
-            .map_err(|e| CedarError::Auth(format!("Failed to write credentials file: {}", e)))?;
+            .map_err(|e| CedarError::Auth(format!("Failed to write credentials file: {e}")))?;
 
         info!("Credentials saved to {:?}", self.config.credentials_file);
         Ok(())
