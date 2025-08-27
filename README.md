@@ -15,7 +15,7 @@ A Rust daemon that enables local editor access to Google Docs with real-time syn
 ## Architecture
 
 ```
-┌─────────────────┐    JSON-RPC    ┌─────────────────┐    OAuth2/HTTPS    ┌─────────────────┐
+┌─────────────────┐    JSON-RPC    ┌─────────────────┐    OAuth2/HTTPS     ┌─────────────────┐
 │   VS Code       │ ◄────────────► │   Cedar Daemon  │ ◄─────────────────► │  Google APIs    │
 │   Neovim        │                │                 │                     │  • Docs API     │
 │   Emacs         │                │  • Auth Manager │                     │  • Drive API    │
