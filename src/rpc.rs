@@ -654,6 +654,8 @@ impl JsonRpcServer {
         Ok(false)
     }
 
+    // Graceful shutdown method for future use
+    #[allow(dead_code)]
     pub async fn shutdown(&mut self) -> Result<()> {
         if let Some(handle) = self.handle.take() {
             handle

@@ -4,6 +4,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
+// Structs for future webhook/change notification features (Roadmap: Webhook push notifications)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileResource {
     pub id: String,
@@ -18,6 +20,7 @@ pub struct FileResource {
     pub last_modifying_user: Option<User>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     #[serde(rename = "displayName")]
@@ -26,6 +29,7 @@ pub struct User {
     pub email_address: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Change {
     #[serde(rename = "changeType")]
@@ -37,6 +41,7 @@ pub struct Change {
     pub file_id: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangeList {
     pub kind: String,
@@ -47,6 +52,7 @@ pub struct ChangeList {
     pub changes: Vec<Change>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartPageToken {
     pub kind: String,
@@ -54,6 +60,7 @@ pub struct StartPageToken {
     pub start_page_token: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchRequest {
     pub id: String,
@@ -64,6 +71,7 @@ pub struct WatchRequest {
     pub expiration: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchResponse {
     pub kind: String,
@@ -90,6 +98,8 @@ impl GoogleDriveClient {
         }
     }
 
+    // Methods for future webhook/change notification features (Roadmap: Webhook push notifications)
+    #[allow(dead_code)]
     pub async fn get_file(&self, file_id: &str, credentials: &Credentials) -> Result<FileResource> {
         let url = format!("{}/files/{}", self.base_url, file_id);
 
@@ -137,6 +147,7 @@ impl GoogleDriveClient {
         Ok(file)
     }
 
+    #[allow(dead_code)]
     pub async fn get_start_page_token(&self, credentials: &Credentials) -> Result<String> {
         let url = format!("{}/changes/startPageToken", self.base_url);
 
@@ -185,6 +196,7 @@ impl GoogleDriveClient {
         Ok(token_response.start_page_token)
     }
 
+    #[allow(dead_code)]
     pub async fn list_changes(
         &self,
         page_token: &str,
@@ -239,6 +251,7 @@ impl GoogleDriveClient {
         Ok(changes)
     }
 
+    #[allow(dead_code)]
     pub async fn watch_changes(
         &self,
         page_token: &str,
@@ -300,6 +313,7 @@ impl GoogleDriveClient {
         Ok(watch_response)
     }
 
+    #[allow(dead_code)]
     pub async fn stop_watch(
         &self,
         channel_id: &str,

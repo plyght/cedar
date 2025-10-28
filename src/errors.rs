@@ -11,9 +11,12 @@ pub enum CedarError {
     #[error("Google Drive API error: {0}")]
     GoogleDrive(String),
 
+    // Future error types for planned features
+    #[allow(dead_code)]
     #[error("Document sync error: {0}")]
     Sync(String),
 
+    #[allow(dead_code)]
     #[error("Diff calculation error: {0}")]
     Diff(String),
 
@@ -32,6 +35,7 @@ pub enum CedarError {
     #[error("JSON parsing error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[allow(dead_code)]
     #[error("OAuth2 error: {0}")]
     OAuth2(String),
 

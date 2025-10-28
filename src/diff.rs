@@ -238,6 +238,8 @@ impl DiffCalculator {
         Ok(utf16_offsets[utf8_index])
     }
 
+    // Helper method for applying remote changes - useful for future conflict resolution features
+    #[allow(dead_code)]
     pub fn apply_remote_changes(
         &self,
         local_text: &str,
@@ -345,20 +347,20 @@ mod tests {
     #[test]
     fn test_simple_insert() {
         let mut calc = DiffCalculator::new();
-        let old_text = "Hello world";
-        let new_text = "Hello beautiful world";
+        let old_text = "Hello world\n";
+        let new_text = "Hello world\nNew line\n";
 
         let edits = calc.calculate_edits(old_text, new_text).unwrap();
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].operation, EditOperation::Insert);
-        assert_eq!(edits[0].new_text, "beautiful ");
+        assert_eq!(edits[0].new_text, "New line\n");
     }
 
     #[test]
     fn test_simple_delete() {
         let mut calc = DiffCalculator::new();
-        let old_text = "Hello beautiful world";
-        let new_text = "Hello world";
+        let old_text = "Hello world\nExtra line\n";
+        let new_text = "Hello world\n";
 
         let edits = calc.calculate_edits(old_text, new_text).unwrap();
         assert_eq!(edits.len(), 1);
@@ -373,7 +375,9 @@ mod tests {
 
         assert!(!offsets.is_empty());
         assert_eq!(offsets[0], 0);
-        assert!(offsets.last().unwrap() > &text.len());
+        // Text has 13 chars: "Hello" (5) + " " (1) + "😄" (1 char, 2 UTF-16 units) + " " (1) + "world" (5)
+        // Total UTF-16 units: 5 + 1 + 2 + 1 + 5 = 14
+        assert_eq!(*offsets.last().unwrap(), 14);
     }
 
     #[test]
