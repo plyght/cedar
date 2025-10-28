@@ -375,8 +375,9 @@ mod tests {
 
         assert!(!offsets.is_empty());
         assert_eq!(offsets[0], 0);
-        // Text has 13 chars: "Hello" (5) + " " (1) + "😄" (1 char, 2 UTF-16 units) + " " (1) + "world" (5)
-        // Total UTF-16 units: 5 + 1 + 2 + 1 + 5 = 14
+        // Text has 13 characters (graphemes), but UTF-16 length is different:
+        // "Hello" (5) + " " (1) + "😄" (1 char = 2 UTF-16 units) + " " (1) + "world" (5)
+        // Total UTF-16 code units: 5 + 1 + 2 + 1 + 5 = 14
         assert_eq!(*offsets.last().unwrap(), 14);
     }
 
